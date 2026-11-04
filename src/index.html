@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<title>점심 빙고 — 회사 앞 매출 상위 24곳 도장깨기</title>
+<meta name="description" content="회사 앞에서 점심에 문 여는 매출 상위 24곳으로 만든 빙고판. 한 곳 갈 때마다 도장 하나, 한 줄 채우면 빙고. 최근 1개월 BC카드 결제 데이터(eat.pl 잇플) 기반.">
+<meta property="og:title" content="점심 빙고 — 회사 앞 매출 상위 24곳 도장깨기">
+<meta property="og:description" content="판교·강남·여의도·광화문·성수·구디/가디 등 18개 오피스 동네. 한 곳 갈 때마다 도장, 한 줄 채우면 빙고.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://indosaram.github.io/lunch-bingo/">
+<meta property="og:image" content="https://indosaram.github.io/lunch-bingo/og.png">
+<meta name="theme-color" content="#f3efe6">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <a class="mark" href="./" aria-label="점심 빙고 처음으로">점심<span>빙고</span></a>
+  <button class="area-btn" id="areaBtn" type="button" aria-haspopup="dialog">
+    <span id="areaName">동네 고르기</span><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M1 3l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
+  </button>
+</header>
+
+<main id="app">
+  <section class="intro" id="intro" hidden>
+    <p class="kicker">회사 앞 점심 도장깨기</p>
+    <h1>매출 상위 24곳,<br>다 가보면 빙고.</h1>
+    <p class="lede">우리 회사 동네에서 <b>점심에 문 여는</b> 식당을 최근 1개월 카드 결제 매출 순으로 골라 5×5 판에 깔았어요. 한 곳 갈 때마다 도장 하나, 가로·세로·대각선 한 줄이면 빙고입니다.</p>
+    <h2 class="pick-title">어느 동네에서 일하세요?</h2>
+    <ul class="area-list" id="introAreas"></ul>
+  </section>
+
+  <section id="boardView" hidden>
+    <div class="friend" id="friend" hidden></div>
+    <div class="card">
+      <div class="card-head">
+        <div>
+          <p class="card-no" id="cardNo"></p>
+          <h1 class="card-title" id="cardTitle"></h1>
+        </div>
+        <dl class="score">
+          <div><dt>도장</dt><dd><b id="stampCount">0</b>/24</dd></div>
+          <div><dt>빙고</dt><dd><b id="lineCount">0</b>줄</dd></div>
+        </dl>
+      </div>
+      <ol class="grid" id="grid" aria-label="점심 빙고판"></ol>
+    </div>
+    <div class="actions">
+      <button class="btn primary" id="drawBtn" type="button">안 가본 곳 하나 뽑기</button>
+      <button class="btn" id="shareBtn" type="button">내 판 공유</button>
+    </div>
+    <ol class="how">
+      <li><b>칸을 누르면</b> 그 집의 매출 순위, 결제로 추정한 영업시간, 붐비는 때를 볼 수 있어요.</li>
+      <li><b>다녀왔으면 도장.</b> 도장은 이 기기에만 저장돼요. 로그인 없음.</li>
+      <li><b>판은 매달 바뀌어요.</b> 같은 동네 동료는 이번 달 같은 판을 받습니다.</li>
+    </ol>
+  </section>
+</main>
+
+<footer class="foot">
+  <p class="src">eat.pl 잇플 · BC카드 결제 데이터 기반 <span id="updated"></span></p>
+  <p>매출 순위는 최근 1개월 BC카드 결제 기준이며 맛 평가가 아닙니다. 영업시간은 결제 승인 시각으로 추정한 값이라 공식 영업시간과 다를 수 있어요.</p>
+  <p>이 사이트는 BC카드·eat.pl의 공식 서비스가 아니며, 공개된 <a href="https://github.com/NomaDamas/k-skill/tree/main/bccard-eatpl-search">k-skill 잇플 스킬</a>로 데이터를 받아 보여 줍니다. 만든 사람 <a href="https://github.com/Indosaram">윤인도</a> · <a href="https://github.com/Indosaram/lunch-bingo">소스</a></p>
+</footer>
+
+<dialog class="sheet" id="storeSheet" aria-labelledby="sName">
+  <form method="dialog" class="sheet-close"><button aria-label="닫기">닫기</button></form>
+  <p class="s-cat" id="sCat"></p>
+  <h2 class="s-name" id="sName"></h2>
+  <p class="s-addr" id="sAddr"></p>
+  <dl class="s-stats">
+    <div><dt>전국 매출</dt><dd id="sAll"></dd></div>
+    <div><dt>동네 매출</dt><dd id="sLoc"></dd></div>
+    <div><dt>영업 예상</dt><dd id="sHours"></dd></div>
+    <div><dt>붐비는 때</dt><dd id="sBusy"></dd></div>
+  </dl>
+  <p class="s-cust" id="sCust"></p>
+  <div class="s-actions">
+    <a class="btn primary" id="sLink" href="#" target="_blank" rel="noopener">잇플에서 자세히 보기<svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M4 2h6v6M10 2L3 9" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></a>
+    <button class="btn" id="sStamp" type="button">다녀왔어요, 도장 찍기</button>
+  </div>
+  <p class="s-note">매출 순위는 같은 업종 안 백분위예요. 숫자가 작을수록 많이 팔린 집.</p>
+</dialog>
+
+<dialog class="sheet" id="areaSheet" aria-label="동네 고르기">
+  <form method="dialog" class="sheet-close"><button aria-label="닫기">닫기</button></form>
+  <h2 class="s-name">동네 고르기</h2>
+  <ul class="area-list" id="sheetAreas"></ul>
+</dialog>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<script src="app.js"></script>
+</body>
+</html>

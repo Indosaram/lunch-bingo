@@ -1,0 +1,222 @@
+(() => {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const LINES = [];
+  for (let i = 0; i < 5; i++) {
+    LINES.push([0, 1, 2, 3, 4].map((j) => i * 5 + j));
+    LINES.push([0, 1, 2, 3, 4].map((j) => j * 5 + i));
+  }
+  LINES.push([0, 6, 12, 18, 24], [4, 8, 12, 16, 20]);
+  const FREE = 12;
+  const KEY = "lunchbingo:v1";
+
+  let areas = [];
+  let data = null; // current area json
+  let stamps = load();
+  let current = null; // store index in sheet
+  let lastLines = 0;
+
+  function load() {
+    try { return JSON.parse(localStorage.getItem(KEY)) || { area: null, s: {} }; }
+    catch { return { area: null, s: {} }; }
+  }
+  function save() { try { localStorage.setItem(KEY, JSON.stringify(stamps)); } catch {} }
+
+  const cellToStore = (c) => (c < FREE ? c : c - 1);
+  const storeToCell = (s) => (s < FREE ? s : s + 1);
+  const isOn = (st) => !!stamps.s[st.u];
+
+  function pct(v) {
+    if (v === null || v === undefined || v === "") return "–";
+    const n = Number(v);
+    if (!isFinite(n)) return "–";
+    return "상위 " + (n < 1 ? String(Math.round(n * 100) / 100) : (Math.round(n * 10) / 10).toString()) + "%";
+  }
+  function rot(u) { // deterministic tilt per store
+    let h = 0; for (const ch of u) h = (h * 31 + ch.charCodeAt(0)) | 0;
+    return (((h >>> 0) % 28) - 18) + "deg";
+  }
+  function sealSVG(date) {
+    return `<svg class="seal" viewBox="0 0 100 100" aria-hidden="true">
+      <circle cx="50" cy="50" r="45" fill="none" stroke="currentColor" stroke-width="5"/>
+      <circle cx="50" cy="50" r="37" fill="none" stroke="currentColor" stroke-width="1.6"/>
+      <text x="50" y="57" text-anchor="middle" font-size="25" font-weight="800" fill="currentColor" font-family="Pretendard Variable, sans-serif">먹음</text>
+      <text x="50" y="76" text-anchor="middle" font-size="10.5" font-weight="700" fill="currentColor" font-family="ui-monospace, monospace">${date}</text>
+    </svg>`;
+  }
+  function esc(s) { return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
+
+  function toast(msg) {
+    const t = $("toast"); t.textContent = msg; t.classList.add("show");
+    clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove("show"), 2200);
+  }
+
+  function onCells() {
+    const on = new Set([FREE]);
+    data.stores.forEach((st, i) => { if (isOn(st)) on.add(storeToCell(i)); });
+    return on;
+  }
+  function lines(on) { return LINES.filter((l) => l.every((c) => on.has(c))); }
+
+  function renderAreaLists() {
+    const html = areas.map((a) => `<li><button type="button" data-area="${a.id}" ${data && data.id === a.id ? 'aria-current="true"' : ""}><b>${esc(a.name)}</b><span>${esc(a.sub)}</span></button></li>`).join("");
+    $("introAreas").innerHTML = html; $("sheetAreas").innerHTML = html;
+  }
+
+  function renderBoard(popIdx) {
+    const on = onCells();
+    const done = lines(on);
+    const lineCells = new Set(done.flat());
+    const g = $("grid");
+    let html = "";
+    for (let c = 0; c < 25; c++) {
+      if (c === FREE) {
+        html += `<li class="cell free${lineCells.has(c) ? " line" : ""}"><div class="free-in"><span class="t">12:00</span><span class="l">점심시간</span></div></li>`;
+        continue;
+      }
+      const i = cellToStore(c), st = data.stores[i], s = stamps.s[st.u];
+      html += `<li class="cell${s ? " on" : ""}${lineCells.has(c) ? " line" : ""}${popIdx === i ? " pop" : ""}" style="--rot:${rot(st.u)}" data-i="${i}">
+        <button type="button" aria-label="${esc(st.s)}, ${esc(st.c)}${s ? ", 도장 찍음" : ""}">
+          <span class="nm">${esc(st.s)}</span>
+          <span><span class="ct">${esc(st.c)}</span><br><span class="rk">${esc(pct(st.r))}</span></span>
+        </button>${s ? sealSVG(s.slice(5).replace("-", ".")) : ""}</li>`;
+    }
+    g.innerHTML = html;
+    const n = data.stores.filter(isOn).length;
+    $("stampCount").textContent = n;
+    $("lineCount").textContent = done.length;
+    if (done.length > lastLines && popIdx !== undefined) toast(done.length === 12 ? "판 완성. 이 동네 점심은 마스터!" : `빙고! ${done.length}줄`);
+    lastLines = done.length;
+  }
+
+  function openStore(i) {
+    current = i;
+    const st = data.stores[i];
+    $("sCat").textContent = st.c || "";
+    $("sName").textContent = st.n;
+    $("sAddr").textContent = st.a || "";
+    $("sAll").textContent = pct(st.r);
+    $("sLoc").textContent = pct(st.g);
+    $("sHours").textContent = st.h || "–";
+    $("sBusy").textContent = [st.bd ? st.bd + "요일" : "", st.bt || ""].filter(Boolean).join(" ") || "–";
+    const tags = [];
+    if (st.lo) tags.push("동네 단골 많음");
+    if (st.gr) tags.push("회식 결제 많음");
+    if (st.fr) tags.push("외국인 손님 많음");
+    $("sCust").innerHTML = (st.cu && st.cu.length ? `주로 오는 손님 <b>${st.cu.map(esc).join(" · ")}</b><br>` : "") + tags.map((t) => `<span class="tag">${t}</span>`).join("");
+    // 받은 merUrl 그대로. 추적 파라미터·리다이렉트 없음 (공모전 집계 조건)
+    $("sLink").href = st.u;
+    syncStampBtn();
+    $("storeSheet").showModal();
+  }
+  function syncStampBtn() {
+    const b = $("sStamp"), on = isOn(data.stores[current]);
+    b.textContent = on ? "도장 지우기" : "다녀왔어요, 도장 찍기";
+    b.classList.toggle("done", on);
+  }
+
+  function today() {
+    const d = new Date(Date.now() + 9 * 3600e3); // KST
+    return d.toISOString().slice(0, 10);
+  }
+
+  function bitmask() {
+    let n = 0;
+    data.stores.forEach((st, i) => { if (isOn(st)) n |= 1 << i; });
+    return (n >>> 0).toString(36);
+  }
+
+  function renderFriend(params) {
+    const f = $("friend");
+    const s = params.get("s"), b = params.get("b");
+    if (!s || params.get("a") !== data.id) { f.hidden = true; return; }
+    const n = parseInt(s, 36) >>> 0;
+    const on = new Set([FREE]);
+    for (let i = 0; i < 24; i++) if (n & (1 << i)) on.add(storeToCell(i));
+    const cnt = on.size - 1, ln = lines(on).length;
+    const same = b === data.board;
+    let mini = "";
+    for (let c = 0; c < 25; c++) mini += `<i class="${on.has(c) ? "on" : ""}"></i>`;
+    f.innerHTML = `<div class="mini" aria-hidden="true">${mini}</div><div>동료의 ${esc(data.name)} 판 — 도장 <b>${cnt}개</b> · 빙고 <b>${ln}줄</b><br>${same ? "같은 판이에요. 내 도장을 모아 따라잡아 보세요." : "판이 그사이 새로 바뀌었어요. 이번 판으로 시작해 보세요."}</div>`;
+    f.hidden = false;
+  }
+
+  async function openArea(id, params) {
+    const res = await fetch(`data/${encodeURIComponent(id)}.json`, { cache: "no-cache" });
+    if (!res.ok) { toast("이 동네 판을 불러오지 못했어요"); showIntro(); return; }
+    data = await res.json();
+    stamps.area = id; save();
+    $("areaName").textContent = data.name;
+    $("cardNo").textContent = `No. ${data.updated.slice(0, 7).replace("-", ".")} · ${data.board.toUpperCase()}`;
+    $("cardTitle").textContent = `${data.name} 점심 빙고`;
+    $("updated").textContent = `· ${data.updated} 갱신`;
+    document.title = `${data.name} 점심 빙고 — 매출 상위 24곳 도장깨기`;
+    lastLines = lines(onCells()).length;
+    renderBoard();
+    renderAreaLists();
+    renderFriend(params || new URLSearchParams());
+    $("intro").hidden = true; $("boardView").hidden = false;
+    const u = new URL(location.href);
+    if (!params || params.get("a") !== id) { u.search = "?a=" + id; history.replaceState(null, "", u); }
+  }
+
+  function showIntro() {
+    $("boardView").hidden = true; $("intro").hidden = false; $("areaName").textContent = "동네 고르기";
+  }
+
+  function draw() {
+    const left = data.stores.map((st, i) => (isOn(st) ? -1 : i)).filter((i) => i >= 0);
+    if (!left.length) { toast("이미 다 가봤어요. 다음 달 새 판을 기다려 주세요"); return; }
+    const i = left[Math.floor(Math.random() * left.length)];
+    document.querySelectorAll(".cell.hl").forEach((el) => el.classList.remove("hl"));
+    const el = document.querySelector(`.cell[data-i="${i}"]`);
+    if (el) { el.classList.add("hl"); el.scrollIntoView({ block: "nearest", behavior: "smooth" }); }
+    setTimeout(() => openStore(i), 650);
+  }
+
+  async function share() {
+    const url = `${location.origin}${location.pathname}?a=${data.id}&b=${data.board}&s=${bitmask()}`;
+    const n = data.stores.filter(isOn).length, ln = lines(onCells()).length;
+    const text = `${data.name} 점심 빙고, 나는 도장 ${n}개 · 빙고 ${ln}줄. 회사 앞 매출 상위 24곳 같이 깨요.`;
+    if (navigator.share) {
+      try { await navigator.share({ title: "점심 빙고", text, url }); return; } catch (e) { if (e && e.name === "AbortError") return; }
+    }
+    try { await navigator.clipboard.writeText(`${text}\n${url}`); toast("링크를 복사했어요"); }
+    catch { prompt("이 링크를 복사해 보내세요", url); }
+  }
+
+  // events
+  document.addEventListener("click", (e) => {
+    const a = e.target.closest("[data-area]");
+    if (a) { $("areaSheet").close(); openArea(a.dataset.area); return; }
+    const cell = e.target.closest(".cell[data-i] button");
+    if (cell) openStore(Number(cell.parentElement.dataset.i));
+  });
+  $("areaBtn").addEventListener("click", () => { renderAreaLists(); $("areaSheet").showModal(); });
+  $("drawBtn").addEventListener("click", draw);
+  $("shareBtn").addEventListener("click", share);
+  $("sStamp").addEventListener("click", () => {
+    const st = data.stores[current];
+    if (isOn(st)) delete stamps.s[st.u]; else stamps.s[st.u] = today();
+    save(); syncStampBtn();
+    const stamped = isOn(st);
+    renderBoard(stamped ? current : undefined);
+    if (stamped) setTimeout(() => $("storeSheet").close(), 380);
+  });
+  for (const d of [$("storeSheet"), $("areaSheet")]) {
+    d.addEventListener("click", (e) => { if (e.target === d) d.close(); }); // backdrop tap
+  }
+
+  // boot
+  (async () => {
+    try {
+      const r = await fetch("data/areas.json", { cache: "no-cache" });
+      const j = await r.json(); areas = j.areas;
+    } catch { areas = []; }
+    renderAreaLists();
+    const params = new URLSearchParams(location.search);
+    const want = params.get("a") || stamps.area;
+    if (want && areas.some((a) => a.id === want)) openArea(want, params);
+    else showIntro();
+  })();
+})();
