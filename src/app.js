@@ -32,6 +32,11 @@
     if (!isFinite(n)) return "–";
     return "상위 " + (n < 1 ? String(Math.round(n * 100) / 100) : (Math.round(n * 10) / 10).toString()) + "%";
   }
+  function num(v) {
+    const n = Number(v);
+    if (v === null || v === undefined || v === "" || !isFinite(n)) return "–";
+    return n < 1 ? String(Math.round(n * 100) / 100) : String(Math.round(n * 10) / 10);
+  }
   function rot(u) { // deterministic tilt per store
     let h = 0; for (const ch of u) h = (h * 31 + ch.charCodeAt(0)) | 0;
     return (((h >>> 0) % 28) - 18) + "deg";
@@ -77,8 +82,8 @@
       const i = cellToStore(c), st = data.stores[i], s = stamps.s[st.u];
       html += `<li class="cell${s ? " on" : ""}${lineCells.has(c) ? " line" : ""}${popIdx === i ? " pop" : ""}" style="--rot:${rot(st.u)}" data-i="${i}">
         <button type="button" aria-label="${esc(st.s)}, ${esc(st.c)}${s ? ", 도장 찍음" : ""}">
-          <span class="nm${st.s.length > 11 ? " xlong" : st.s.length > 7 ? " long" : ""}">${esc(st.s)}</span>
-          <span><span class="ct">${esc(st.c)}</span><br><span class="rk">${esc(pct(st.r))}</span></span>
+          <span class="nm${st.s.length > 10 ? " xlong" : st.s.length > 6 ? " long" : ""}">${esc(st.s)}</span>
+          <span class="rk">${esc(num(st.r))}<small>%</small></span>
         </button>${s ? sealSVG(s.slice(5).replace("-", ".")) : ""}</li>`;
     }
     g.innerHTML = html;
