@@ -64,9 +64,11 @@ main{max-width:520px;margin:0 auto;padding:18px 18px 8px}
   justify-content:space-between;cursor:pointer;-webkit-tap-highlight-color:transparent}
 .cell button:focus-visible{outline:2px solid var(--ink);outline-offset:-2px}
 .cell .nm{font-size:12px;line-height:1.25;font-weight:700;letter-spacing:-.05em;word-break:keep-all;overflow-wrap:anywhere;
-  display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+  display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;text-wrap:balance}
+.cell .nm.long{font-size:10.5px;letter-spacing:-.06em}
+.cell .nm.xlong{font-size:9.5px;letter-spacing:-.07em}
 .cell .ct{font-size:10px;color:var(--ink-3);line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.cell .rk{font-family:var(--mono);font-size:9.5px;color:var(--ink-2);letter-spacing:-.02em}
+.cell .rk{font-family:var(--mono);font-size:10px;color:var(--ink);letter-spacing:-.02em}
 .cell.free{background:repeating-linear-gradient(-45deg,transparent 0 5px,var(--rule-2) 5px 6px)}
 .cell.free .free-in{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center}
 .cell.free .t{font-family:var(--mono);font-size:15px;font-weight:700;letter-spacing:-.02em}

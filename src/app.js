@@ -77,7 +77,7 @@
       const i = cellToStore(c), st = data.stores[i], s = stamps.s[st.u];
       html += `<li class="cell${s ? " on" : ""}${lineCells.has(c) ? " line" : ""}${popIdx === i ? " pop" : ""}" style="--rot:${rot(st.u)}" data-i="${i}">
         <button type="button" aria-label="${esc(st.s)}, ${esc(st.c)}${s ? ", 도장 찍음" : ""}">
-          <span class="nm">${esc(st.s)}</span>
+          <span class="nm${st.s.length > 11 ? " xlong" : st.s.length > 7 ? " long" : ""}">${esc(st.s)}</span>
           <span><span class="ct">${esc(st.c)}</span><br><span class="rk">${esc(pct(st.r))}</span></span>
         </button>${s ? sealSVG(s.slice(5).replace("-", ".")) : ""}</li>`;
     }

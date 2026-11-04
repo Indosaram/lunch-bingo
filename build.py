@@ -57,6 +57,9 @@ def hours(it):
 def short_name(n):
     n = re.sub(r"\(주\)|㈜|주식회사|\(유\)|유한회사", "", n).strip()
     n = re.sub(r"\s*\([^)]*\)\s*$", "", n).strip()  # trailing (지점)
+    m = re.match(r"^(.{2,}?)\s+\S*점$", n)  # '역전우동 판교역점' -> '역전우동'
+    if m:
+        n = m.group(1).strip()
     return n or "이름 없음"
 
 def pick(items):
