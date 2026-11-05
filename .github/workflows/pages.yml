@@ -3,7 +3,7 @@ on:
   push:
     branches: [main]
   schedule:
-    - cron: "30 20 * * *"   # 매일 05:30 KST — 잇플 데이터로 판 다시 빌드
+    - cron: "30 20 * * *"   # 매일 05:30 KST — 월별 판 유지, 표시 데이터 갱신
   workflow_dispatch:
 permissions:
   contents: read
@@ -21,6 +21,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Regression tests (offline fixtures)
+        run: |
+          python3 -m unittest discover -s tests -p 'test_*.py' -v
+          node --check src/app.js
+          node --test tests/test_app.cjs
       - name: Build (k-skill bccard-eatpl-search → site/)
         run: python3 build.py
       - uses: actions/upload-pages-artifact@v3

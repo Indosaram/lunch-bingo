@@ -8,23 +8,75 @@
   }
   LINES.push([0, 6, 12, 18, 24], [4, 8, 12, 16, 20]);
   const FREE = 12;
-  const KEY = "lunchbingo:v1";
+  const LEGACY_KEY = "lunchbingo:v1";
+  const KEY = "lunchbingo:v2";
 
   let areas = [];
   let data = null; // current area json
+  const legacy = readStorage(LEGACY_KEY);
   let stamps = load();
+  let progress = Object.create(null);
+  let areaRequest = 0;
+  let loading = false;
+  let drawTimer, closeTimer;
   let current = null; // store index in sheet
   let lastLines = 0;
 
+  const own = (obj, key) => Object.prototype.hasOwnProperty.call(obj, key);
+  function record(v) { return v !== null && typeof v === "object" && !Array.isArray(v); }
+  function readStorage(key) {
+    try {
+      const value = JSON.parse(localStorage.getItem(key));
+      return record(value) ? value : {};
+    } catch { return {}; }
+  }
   function load() {
-    try { return JSON.parse(localStorage.getItem(KEY)) || { area: null, s: {} }; }
-    catch { return { area: null, s: {} }; }
+    const value = readStorage(KEY);
+    return {
+      area: typeof value.area === "string" ? value.area : (typeof legacy.area === "string" ? legacy.area : null),
+      boards: record(value.boards) ? value.boards : {},
+    };
   }
   function save() { try { localStorage.setItem(KEY, JSON.stringify(stamps)); } catch {} }
+  function validDate(value) {
+    if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+    const date = new Date(value + "T00:00:00Z");
+    return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
+  }
+  function boardMonth(board) {
+    const month = board.month ?? (typeof board.updated === "string" ? board.updated.slice(0, 7) : "");
+    if (typeof month !== "string" || !/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) throw new Error("Invalid board month");
+    return month;
+  }
+  function useProgress(board) {
+    // Board hashes may change during a correction. Month + area is the challenge.
+    const month = boardMonth(board), key = JSON.stringify([month, board.id]);
+    if (!own(stamps.boards, key)) {
+      const migrated = Object.create(null);
+      // v1 visits were global by URL; its saved area was only the last selection.
+      // Preserve those visits wherever the URL occurs, then keep new visits area-scoped.
+      if (record(legacy.s)) {
+        // Retain absent URLs too: a later correction can restore a restaurant.
+        // Only current board stores contribute to the rendered score.
+        for (const [url, date] of Object.entries(legacy.s)) {
+          if (validDate(date) && date.slice(0, 7) === month) migrated[url] = date;
+        }
+      }
+      stamps.boards[key] = migrated; // Also marks an empty migration as completed.
+    }
+    const saved = stamps.boards[key];
+    progress = Object.create(null);
+    if (record(saved)) {
+      for (const [url, date] of Object.entries(saved)) {
+        if (validDate(date)) progress[url] = date;
+      }
+    }
+    stamps.boards[key] = progress;
+  }
 
   const cellToStore = (c) => (c < FREE ? c : c - 1);
   const storeToCell = (s) => (s < FREE ? s : s + 1);
-  const isOn = (st) => !!stamps.s[st.u];
+  const isOn = (st) => !!progress[st.u];
 
   function pct(v) {
     if (v === null || v === undefined || v === "") return "–";
@@ -79,7 +131,7 @@
         html += `<li class="cell free${lineCells.has(c) ? " line" : ""}"><div class="free-in"><span class="t">12:00</span><span class="l">점심시간</span></div></li>`;
         continue;
       }
-      const i = cellToStore(c), st = data.stores[i], s = stamps.s[st.u];
+      const i = cellToStore(c), st = data.stores[i], s = progress[st.u];
       html += `<li class="cell${s ? " on" : ""}${lineCells.has(c) ? " line" : ""}${popIdx === i ? " pop" : ""}" style="--rot:${rot(st.u)}" data-i="${i}">
         <button type="button" aria-label="${esc(st.s)}, ${esc(st.c)}${s ? ", 도장 찍음" : ""}">
           <span class="nm${st.s.length > 10 ? " xlong" : st.s.length > 6 ? " long" : ""}">${esc(st.s)}</span>
@@ -95,11 +147,14 @@
   }
 
   function openStore(i) {
+    if (loading || !data || !data.stores[i]) return;
+    clearTimeout(closeTimer);
     current = i;
     const st = data.stores[i];
     $("sCat").textContent = st.c || "";
     $("sName").textContent = st.n;
     $("sAddr").textContent = st.a || "";
+    $("sUpdated").textContent = `식당 정보 갱신: ${st.updated || data.updated}`;
     $("sAll").textContent = pct(st.r);
     $("sLoc").textContent = pct(st.g);
     $("sHours").textContent = st.h || "–";
@@ -147,12 +202,29 @@
   }
 
   async function openArea(id, params) {
-    const res = await fetch(`data/${encodeURIComponent(id)}.json`, { cache: "no-cache" });
-    if (!res.ok) { toast("이 동네 판을 불러오지 못했어요"); showIntro(); return; }
-    data = await res.json();
+    const request = ++areaRequest;
+    loading = true;
+    clearTimeout(drawTimer); clearTimeout(closeTimer);
+    $("storeSheet").close(); current = null;
+    let next;
+    try {
+      const res = await fetch(`data/${encodeURIComponent(id)}.json`, { cache: "no-cache" });
+      if (!res.ok) throw new Error("Board unavailable");
+      next = await res.json();
+      if (request !== areaRequest) return;
+      if (next.id !== id || !Array.isArray(next.stores) || next.stores.length !== 24) throw new Error("Invalid board");
+      boardMonth(next);
+    } catch {
+      if (request !== areaRequest) return;
+      loading = false;
+      toast("이 동네 판을 불러오지 못했어요"); showIntro(); return;
+    }
+    loading = false;
+    data = next;
+    useProgress(data);
     stamps.area = id; save();
     $("areaName").textContent = data.name;
-    $("cardNo").textContent = `No. ${data.updated.slice(0, 7).replace("-", ".")} · ${data.board.toUpperCase()}`;
+    $("cardNo").textContent = `No. ${boardMonth(data).replace("-", ".")} · ${data.board.toUpperCase()}`;
     $("cardTitle").textContent = `${data.name} 점심 빙고`;
     $("updated").textContent = `· ${data.updated} 갱신`;
     document.title = `${data.name} 점심 빙고 — 매출 상위 24곳 도장깨기`;
@@ -166,20 +238,25 @@
   }
 
   function showIntro() {
+    data = null; current = null;
     $("boardView").hidden = true; $("intro").hidden = false; $("areaName").textContent = "동네 고르기";
   }
 
   function draw() {
+    if (loading || !data) return;
+    clearTimeout(drawTimer);
     const left = data.stores.map((st, i) => (isOn(st) ? -1 : i)).filter((i) => i >= 0);
     if (!left.length) { toast("이미 다 가봤어요. 다음 달 새 판을 기다려 주세요"); return; }
     const i = left[Math.floor(Math.random() * left.length)];
     document.querySelectorAll(".cell.hl").forEach((el) => el.classList.remove("hl"));
     const el = document.querySelector(`.cell[data-i="${i}"]`);
     if (el) { el.classList.add("hl"); el.scrollIntoView({ block: "nearest", behavior: "smooth" }); }
-    setTimeout(() => openStore(i), 650);
+    const request = areaRequest;
+    drawTimer = setTimeout(() => { if (request === areaRequest) openStore(i); }, 650);
   }
 
   async function share() {
+    if (loading || !data) return;
     const url = `${location.origin}${location.pathname}?a=${data.id}&b=${data.board}&s=${bitmask()}`;
     const n = data.stores.filter(isOn).length, ln = lines(onCells()).length;
     const text = `${data.name} 점심 빙고, 나는 도장 ${n}개 · 빙고 ${ln}줄. 회사 앞 매출 상위 24곳 같이 깨요.`;
@@ -201,12 +278,13 @@
   $("drawBtn").addEventListener("click", draw);
   $("shareBtn").addEventListener("click", share);
   $("sStamp").addEventListener("click", () => {
+    if (loading || !data || current === null) return;
     const st = data.stores[current];
-    if (isOn(st)) delete stamps.s[st.u]; else stamps.s[st.u] = today();
+    if (isOn(st)) delete progress[st.u]; else progress[st.u] = today();
     save(); syncStampBtn();
     const stamped = isOn(st);
     renderBoard(stamped ? current : undefined);
-    if (stamped) setTimeout(() => $("storeSheet").close(), 380);
+    if (stamped) closeTimer = setTimeout(() => $("storeSheet").close(), 380);
   });
   for (const d of [$("storeSheet"), $("areaSheet")]) {
     d.addEventListener("click", (e) => { if (e.target === d) d.close(); }); // backdrop tap

@@ -8,16 +8,27 @@ site/data/<동네>.json 과 정적 파일을 site/ 에 만든다.
 - 원본 응답은 저장하지 않는다 (공모전 약관 제9조의2: 원본 축적 금지).
 - merUrl 은 받은 그대로 쓰며 서버에서 호출하지 않는다.
 """
-import json, os, re, shutil, sys, time, urllib.parse, urllib.request, hashlib, datetime
+import json, os, re, shutil, sys, time, urllib.parse, urllib.request, urllib.error, hashlib, datetime, math, tempfile
 
 PROXY = os.environ.get("EATPL_PROXY", "https://k-skill-proxy.nomadamas.org/v1/bccard-eatpl/search")
 ROOT = os.path.dirname(os.path.abspath(__file__))
 SITE = os.path.join(ROOT, "site")
 GAP = float(os.environ.get("EATPL_GAP", "3.5"))  # seconds between calls (proxy rate-limits bursts)
+PREVIOUS_SITE = os.environ.get("EATPL_PREVIOUS_SITE", "https://indosaram.github.io/lunch-bingo").rstrip("/")
 
 NOT_LUNCH = {"카페", "호프", "기타주점", "바(bar)", "이자카야", "요리주점", "와인바", "칵테일바",
-             "빵/도넛", "기타베이커리", "제과점", "아이스크림", "디저트", "떡/한과", "뷔페", "편의점"}
+             "빵/도넛", "기타베이커리", "제과점", "아이스크림", "아이스크림/요거트/빙수",
+             "디저트", "떡/한과", "뷔페", "편의점"}
 MER_PREFIX = "https://web.paybooc.ai/"
+CITY_ALIASES = {"서울특별시": "서울", "서울시": "서울", "경기도": "경기"}
+
+def in_locality(address, area):
+    """검색은 부분 일치이므로 주소의 시/도와 시/구를 별도로 검증한다."""
+    parts = str(address or "").split()
+    if not parts:
+        return False
+    parts[0] = CITY_ALIASES.get(parts[0], parts[0])
+    return any(parts[:len(prefix)] == prefix for prefix in area["localities"])
 
 def fetch(loc, tries=5):
     url = PROXY + "?" + urllib.parse.urlencode({"location": loc})
@@ -25,7 +36,14 @@ def fetch(loc, tries=5):
         try:
             req = urllib.request.Request(url, headers={"user-agent": "lunch-bingo-build/1.0 (+https://indosaram.github.io/lunch-bingo/)"})
             with urllib.request.urlopen(req, timeout=40) as r:
-                return json.load(r).get("items", []) or []
+                payload = json.load(r)
+            if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
+                raise ValueError("search response must contain an items array")
+            if not all(isinstance(item, dict) for item in payload["items"]):
+                raise ValueError("search items must be objects")
+            return payload["items"]
+        except ValueError:
+            raise  # Do not treat a changed/error schema as an empty search result.
         except urllib.error.HTTPError as e:
             wait = 20 * (i + 1) if e.code == 429 else 5 * (i + 1)
             print(f"  {loc}: HTTP {e.code}, retry in {wait}s", file=sys.stderr)
@@ -62,20 +80,24 @@ def short_name(n):
         n = m.group(1).strip()
     return n or "이름 없음"
 
-def pick(items):
+def pick(items, area):
     seen, out = set(), []
     for it in items:
         u = it.get("merUrl") or ""
         if not u.startswith(MER_PREFIX) or u in seen:
+            continue
+        if not in_locality(it.get("merAddr"), area):
             continue
         if (it.get("merTpbuzNm") or "") in NOT_LUNCH or not open_at_lunch(it):
             continue
         seen.add(u)
         out.append(it)
     def num(v):
-        try: return float(v)
+        try:
+            n = float(v)
+            return n if math.isfinite(n) else 999.0
         except Exception: return 999.0
-    out.sort(key=lambda x: (num(x.get("allSaleRnk")), num(x.get("ccgSaleRnk"))))
+    out.sort(key=lambda x: (num(x.get("allSaleRnk")), num(x.get("ccgSaleRnk")), x["merUrl"]))
     return out
 
 def view(it):
@@ -98,44 +120,118 @@ def board_order(area_id, stores, month):
         return hashlib.sha1(f"{area_id}:{month}:{s['u']}".encode()).hexdigest()
     return sorted(stores, key=k)
 
+def load_previous(area_id):
+    """Read only the current public display artifact, never raw API history.
+
+    Fail on unreadable existing data rather than silently replacing a monthly
+    board. A 404 means this area has not been published yet.
+    """
+    path = os.path.join(SITE, "data", f"{area_id}.json")
+    if os.path.isfile(path):
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    if not PREVIOUS_SITE:  # explicit first/local build without an existing site
+        return None
+    url = f"{PREVIOUS_SITE}/data/{urllib.parse.quote(area_id, safe='')}.json"
+    req = urllib.request.Request(url, headers={"Cache-Control": "no-cache", "user-agent": "lunch-bingo-build/1.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=40) as response:
+            return json.load(response)
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return None
+        raise
+
+def make_board(area, items, month, updated, previous=None):
+    eligible = pick(items, area)
+    if not eligible:
+        raise ValueError(f"{area['id']}: no verified lunch data; keep the previous deployment")
+    fresh = {it["merUrl"]: {**view(it), "updated": updated} for it in eligible}
+    candidates = list(fresh.values())
+    old_month = None
+    if previous is not None:
+        old_month = previous.get("month") or str(previous.get("updated", ""))[:7]
+        if previous.get("id") != area["id"] or not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", old_month):
+            raise ValueError(f"invalid previous board: {area['id']}")
+        if old_month > month:
+            raise ValueError(f"previous board is from the future: {area['id']}")
+    if previous is not None and old_month == month:
+        old_stores = previous.get("stores")
+        if not isinstance(old_stores, list) or len(old_stores) != 24:
+            raise ValueError(f"invalid previous stores: {area['id']}")
+        seen, board = set(), []
+        # Returned but no longer eligible is a correction, not a ranking change.
+        returned = {it.get("merUrl") for it in items}
+        for old in old_stores:
+            u = old.get("u", "")
+            valid = (isinstance(u, str) and u.startswith(MER_PREFIX) and u not in seen
+                     and in_locality(old.get("a"), area) and old.get("c") not in NOT_LUNCH
+                     and (u not in returned or u in fresh))
+            if valid:
+                seen.add(u)
+                board.append(fresh.get(u) or {**old, "updated": old.get("updated") or previous["updated"]})
+            else:
+                board.append(None)
+        replacements = iter(s for s in candidates if s["u"] not in seen)
+        board = [s if s is not None else next(replacements, None) for s in board]
+        if any(s is None for s in board):
+            raise ValueError(f"{area['id']}: not enough verified lunch spots to repair board")
+    else:
+        if len(candidates) < 24:
+            raise ValueError(f"{area['id']}: only {len(candidates)} verified lunch spots; need 24")
+        board = board_order(area["id"], candidates[:24], month)
+    identity = f"{area['id']}:{month}:" + "|".join(s["u"] for s in board)
+    bid = hashlib.sha1(identity.encode()).hexdigest()[:8]
+    # 'updated' describes displayed data, not merely a successful build attempt.
+    display_updated = max(s["updated"] for s in board)
+    return {"id": area["id"], "name": area["name"], "sub": area["sub"], "board": bid,
+            "month": month, "updated": display_updated, "stores": board}
+
+def build_site(areas, month, updated):
+    # Publish the new directory only after every requested area is valid.
+    # A query failure/shortage must not silently remove a neighborhood.
+    with tempfile.TemporaryDirectory(prefix=".build-", dir=ROOT) as temp:
+        stage = os.path.join(temp, "site")
+        shutil.copytree(os.path.join(ROOT, "src"), stage)
+        os.makedirs(os.path.join(stage, "data"), exist_ok=True)
+        index = []
+        first = True
+        for ar in areas:
+            previous = load_previous(ar["id"])
+            items = []
+            for loc in ar["q"]:
+                if not first:
+                    time.sleep(GAP)
+                first = False
+                got = fetch(loc)
+                print(f"{ar['id']} / {loc}: {len(got)}", file=sys.stderr)
+                items.extend(got)
+            out = make_board(ar, items, month, updated, previous)
+            with open(os.path.join(stage, "data", f"{ar['id']}.json"), "w", encoding="utf-8") as f:
+                json.dump(out, f, ensure_ascii=False, separators=(",", ":"))
+            index.append({"id": ar["id"], "name": ar["name"], "sub": ar["sub"]})
+        if not index:
+            raise ValueError("no areas requested")
+        with open(os.path.join(stage, "data", "areas.json"), "w", encoding="utf-8") as f:
+            json.dump({"updated": updated, "areas": index}, f, ensure_ascii=False)
+        if os.path.isdir(SITE):
+            shutil.rmtree(SITE)
+        shutil.move(stage, SITE)
+    return index
+
+
 def main():
-    areas = json.load(open(os.path.join(ROOT, "areas.json"), encoding="utf-8"))
+    with open(os.path.join(ROOT, "areas.json"), encoding="utf-8") as f:
+        areas = json.load(f)
     only = set(sys.argv[1:])
-    if os.path.isdir(SITE):
-        shutil.rmtree(SITE)
-    shutil.copytree(os.path.join(ROOT, "src"), SITE)
-    os.makedirs(os.path.join(SITE, "data"), exist_ok=True)
+    unknown = only - {a["id"] for a in areas}
+    if unknown:
+        raise ValueError(f"unknown areas: {', '.join(sorted(unknown))}")
+    if only:
+        areas = [a for a in areas if a["id"] in only]
     kst = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=9)
-    month = kst.strftime("%Y-%m")
-    index = []
-    first = True
-    for ar in areas:
-        if only and ar["id"] not in only:
-            continue
-        items = []
-        for loc in ar["q"]:
-            if not first:
-                time.sleep(GAP)
-            first = False
-            got = fetch(loc)
-            print(f"{ar['id']} / {loc}: {len(got)}", file=sys.stderr)
-            items.extend(got)
-        chosen = [view(x) for x in pick(items)[:24]]
-        if len(chosen) < 24:
-            print(f"!! {ar['id']}: only {len(chosen)} lunch spots, skipping", file=sys.stderr)
-            continue
-        board = board_order(ar["id"], chosen, month)
-        bid = hashlib.sha1("|".join(s["u"] for s in board).encode()).hexdigest()[:8]
-        out = {"id": ar["id"], "name": ar["name"], "sub": ar["sub"], "board": bid,
-               "updated": kst.strftime("%Y-%m-%d"), "stores": board}
-        with open(os.path.join(SITE, "data", f"{ar['id']}.json"), "w", encoding="utf-8") as f:
-            json.dump(out, f, ensure_ascii=False, separators=(",", ":"))
-        index.append({"id": ar["id"], "name": ar["name"], "sub": ar["sub"]})
-    with open(os.path.join(SITE, "data", "areas.json"), "w", encoding="utf-8") as f:
-        json.dump({"updated": kst.strftime("%Y-%m-%d"), "areas": index}, f, ensure_ascii=False)
+    index = build_site(areas, kst.strftime("%Y-%m"), kst.strftime("%Y-%m-%d"))
     print(f"built {len(index)} areas -> {SITE}", file=sys.stderr)
-    if not index:
-        sys.exit(1)
 
 if __name__ == "__main__":
     main()
